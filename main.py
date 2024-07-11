@@ -281,26 +281,22 @@ def ResNet50():
 
 
 class VQAModel(nn.Module):
-    def __init__(self, vocab_size: int, n_answer: int):
+    def __init__(self, n_answer: int):
         super().__init__()
         self.resnet = ResNet18()
-        self.text_encoder = nn.Linear(vocab_size, 512)
-
+        self.bert = BertModel.from_pretrained('bert-base-uncased')
         self.fc = nn.Sequential(
-            nn.Linear(1024, 512),
+            nn.Linear(768 + 512, 512),  # BERTの出力サイズは768
             nn.ReLU(inplace=True),
             nn.Linear(512, n_answer)
         )
 
     def forward(self, image, question):
-        image_feature = self.resnet(image)  # 画像の特徴量
-        question_feature = self.text_encoder(question)  # テキストの特徴量
-
+        image_feature = self.resnet(image) # 画像の特徴量
+        question_feature = self.bert(**question).pooler_output # テキストの特徴量
         x = torch.cat([image_feature, question_feature], dim=1)
         x = self.fc(x)
-
         return x
-
 
 # 4. 学習の実装
 def train(model, dataloader, optimizer, criterion, device):
