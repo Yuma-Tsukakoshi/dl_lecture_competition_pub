@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision import transforms
+from transformers import BertTokenizer, BertModel
 
 
 def set_seed(seed):
@@ -65,34 +66,33 @@ def process_text(text):
 class VQADataset(torch.utils.data.Dataset):
     def __init__(self, df_path, image_dir, transform=None, answer=True):
         self.transform = transform  # 画像の前処理
-        self.image_dir = image_dir  # 画像ファイルのディレクトリ
-        self.df = pandas.read_json(df_path)  # 画像ファイルのパス，question, answerを持つDataFrame
+        self.image_dir = image_dir # 画像ファイルのディレクトリ
+        self.df = pandas.read_json(df_path) # 画像ファイルのパス，question, answerを持つDataFrame
         self.answer = answer
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
-        # question / answerの辞書を作成
+        # 質問文に含まれる単語を辞書に追加
         self.question2idx = {}
         self.answer2idx = {}
         self.idx2question = {}
         self.idx2answer = {}
 
-        # 質問文に含まれる単語を辞書に追加
         for question in self.df["question"]:
             question = process_text(question)
             words = question.split(" ")
             for word in words:
                 if word not in self.question2idx:
                     self.question2idx[word] = len(self.question2idx)
-        self.idx2question = {v: k for k, v in self.question2idx.items()}  # 逆変換用の辞書(question)
+        self.idx2question = {v: k for k, v in self.question2idx.items()} # 逆変換用の辞書(question)
 
         if self.answer:
             # 回答に含まれる単語を辞書に追加
             for answers in self.df["answers"]:
                 for answer in answers:
-                    word = answer["answer"]
-                    word = process_text(word)
+                    word = process_text(answer["answer"])
                     if word not in self.answer2idx:
                         self.answer2idx[word] = len(self.answer2idx)
-            self.idx2answer = {v: k for k, v in self.answer2idx.items()}  # 逆変換用の辞書(answer)
+            self.idx2answer = {v: k for k, v in self.answer2idx.items()} # 逆変換用の辞書(answer)
 
     def update_dict(self, dataset):
         """
@@ -130,26 +130,19 @@ class VQADataset(torch.utils.data.Dataset):
         """
         image = Image.open(f"{self.image_dir}/{self.df['image'][idx]}")
         image = self.transform(image)
-        question = np.zeros(len(self.idx2question) + 1)  # 未知語用の要素を追加
-        question_words = self.df["question"][idx].split(" ")
-        for word in question_words:
-            try:
-                question[self.question2idx[word]] = 1  # one-hot表現に変換
-            except KeyError:
-                question[-1] = 1  # 未知語
+        question = process_text(self.df["question"][idx])  # 未知語用の要素を追加
+        question_tokens = self.tokenizer(question, return_tensors='pt', padding=True, truncation=True)
 
         if self.answer:
             answers = [self.answer2idx[process_text(answer["answer"])] for answer in self.df["answers"][idx]]
-            mode_answer_idx = mode(answers)  # 最頻値を取得（正解ラベル）
+            mode_answer_idx = mode(answers)
 
-            return image, torch.Tensor(question), torch.Tensor(answers), int(mode_answer_idx)
-
+            return image, question_tokens, torch.Tensor(answers), int(mode_answer_idx)
         else:
-            return image, torch.Tensor(question)
+            return image, question_tokens
 
     def __len__(self):
         return len(self.df)
-
 
 # 2. 評価指標の実装
 # 簡単にするならBCEを利用する
