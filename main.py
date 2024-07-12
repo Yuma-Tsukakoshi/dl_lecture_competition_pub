@@ -66,8 +66,8 @@ def process_text(text):
 class VQADataset(torch.utils.data.Dataset):
     def __init__(self, df_path, image_dir, transform=None, answer=True):
         self.transform = transform  # 画像の前処理
-        self.image_dir = image_dir # 画像ファイルのディレクトリ
-        self.df = pandas.read_json(df_path) # 画像ファイルのパス，question, answerを持つDataFrame
+        self.image_dir = image_dir  # 画像ファイルのディレクトリ
+        self.df = pandas.read_json(df_path)  # 画像ファイルのパス，question, answerを持つDataFrame
         self.answer = answer
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
@@ -83,51 +83,18 @@ class VQADataset(torch.utils.data.Dataset):
             for word in words:
                 if word not in self.question2idx:
                     self.question2idx[word] = len(self.question2idx)
-        self.idx2question = {v: k for k, v in self.question2idx.items()} # 逆変換用の辞書(question)
+        self.idx2question = {v: k for k, v in self.question2idx.items()}  # 逆変換用の辞書(question)
 
         if self.answer:
-            # 回答に含まれる単語を辞書に追加
-            for answers in self.df["answers"]:
-                for answer in answers:
-                    word = process_text(answer["answer"])
-                    if word not in self.answer2idx:
-                        self.answer2idx[word] = len(self.answer2idx)
-            self.idx2answer = {v: k for k, v in self.answer2idx.items()} # 逆変換用の辞書(answer)
-
-    def update_dict(self, dataset):
-        """
-        検証用データ，テストデータの辞書を訓練データの辞書に更新する．
-
-        Parameters
-        ----------
-        dataset : Dataset
-            訓練データのDataset
-        """
-        self.question2idx = dataset.question2idx
-        self.answer2idx = dataset.answer2idx
-        self.idx2question = dataset.idx2question
-        self.idx2answer = dataset.idx2answer
+            # 提供された大規模な回答コーパスを読み込んで辞書に追加する例
+            class_mapping = pandas.read_csv("https://huggingface.co/spaces/CVPR/VizWiz-CLIP-VQA/raw/main/data/annotations/class_mapping.csv")
+            for index, row in class_mapping.iterrows():
+                word = process_text(row["answer"])
+                if word not in self.answer2idx:
+                    self.answer2idx[word] = len(self.answer2idx)
+            self.idx2answer = {v: k for k, v in self.answer2idx.items()}  # 逆変換用の辞書(answer)
 
     def __getitem__(self, idx):
-        """
-        対応するidxのデータ（画像，質問，回答）を取得．
-
-        Parameters
-        ----------
-        idx : int
-            取得するデータのインデックス
-
-        Returns
-        -------
-        image : torch.Tensor  (C, H, W)
-            画像データ
-        question : torch.Tensor  (vocab_size)
-            質問文をone-hot表現に変換したもの
-        answers : torch.Tensor  (n_answer)
-            10人の回答者の回答のid
-        mode_answer_idx : torch.Tensor  (1)
-            10人の回答者の回答の中で最頻値の回答のid
-        """
         image = Image.open(f"{self.image_dir}/{self.df['image'][idx]}")
         image = self.transform(image)
         question = process_text(self.df["question"][idx])  # 未知語用の要素を追加
@@ -288,12 +255,12 @@ class VQAModel(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(768 + 512, 512),  # BERTの出力サイズは768
             nn.ReLU(inplace=True),
-            nn.Linear(512, n_answer)
+            nn.Linear(512, n_answer)  # 更新された回答数に合わせて出力層を調整
         )
 
     def forward(self, image, question):
-        image_feature = self.resnet(image) # 画像の特徴量
-        question_feature = self.bert(**question).pooler_output # テキストの特徴量
+        image_feature = self.resnet(image)  # 画像の特徴量
+        question_feature = self.bert(**question).pooler_output  # テキストの特徴量
         x = torch.cat([image_feature, question_feature], dim=1)
         x = self.fc(x)
         return x
