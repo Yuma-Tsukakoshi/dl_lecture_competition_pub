@@ -324,14 +324,16 @@ def main():
         transforms.Resize((224, 224)),
         transforms.ToTensor()
     ])
+    
+    # 訓練データとテストデータの準備
     train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform)
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
-    test_dataset.update_dict(train_dataset)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    model = VQAModel(vocab_size=len(train_dataset.question2idx)+1, n_answer=len(train_dataset.answer2idx)).to(device)
+    # 回答数を指定してモデルを初期化
+    model = VQAModel(n_answer=len(train_dataset.answer2idx)).to(device)
 
     # optimizer / criterion
     num_epoch = 20
@@ -356,7 +358,7 @@ def main():
         pred = pred.argmax(1).cpu().item()
         submission.append(pred)
 
-    submission = [train_dataset.idx2answer[id] for id in submission]
+    submission = [test_dataset.idx2answer[id] for id in submission]
     submission = np.array(submission)
     torch.save(model.state_dict(), "model.pth")
     np.save("submission.npy", submission)
