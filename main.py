@@ -65,13 +65,12 @@ def process_text(text):
 # 1. データローダーの作成
 class VQADataset(torch.utils.data.Dataset):
     def __init__(self, df_path, image_dir, transform=None, answer=True):
-        self.transform = transform  # 画像の前処理
-        self.image_dir = image_dir # 画像ファイルのディレクトリ
-        self.df = pandas.read_json(df_path) # 画像ファイルのパス，question, answerを持つDataFrame
+        self.transform = transform
+        self.image_dir = image_dir
+        self.df = pandas.read_json(df_path)
         self.answer = answer
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
-        # 質問文に含まれる単語を辞書に追加
         self.question2idx = {}
         self.answer2idx = {}
         self.idx2question = {}
@@ -83,26 +82,17 @@ class VQADataset(torch.utils.data.Dataset):
             for word in words:
                 if word not in self.question2idx:
                     self.question2idx[word] = len(self.question2idx)
-        self.idx2question = {v: k for k, v in self.question2idx.items()} # 逆変換用の辞書(question)
+        self.idx2question = {v: k for k, v in self.question2idx.items()}
 
         if self.answer:
-            # 回答に含まれる単語を辞書に追加
             for answers in self.df["answers"]:
                 for answer in answers:
                     word = process_text(answer["answer"])
                     if word not in self.answer2idx:
                         self.answer2idx[word] = len(self.answer2idx)
-            self.idx2answer = {v: k for k, v in self.answer2idx.items()} # 逆変換用の辞書(answer)
+            self.idx2answer = {v: k for k, v in self.answer2idx.items()}
 
     def update_dict(self, dataset):
-        """
-        検証用データ，テストデータの辞書を訓練データの辞書に更新する．
-
-        Parameters
-        ----------
-        dataset : Dataset
-            訓練データのDataset
-        """
         self.question2idx = dataset.question2idx
         self.answer2idx = dataset.answer2idx
         self.idx2question = dataset.idx2question
@@ -113,26 +103,21 @@ class VQADataset(torch.utils.data.Dataset):
         image = self.transform(image)
         question = process_text(self.df["question"][idx])
         question_tokens = self.tokenizer(question, return_tensors='pt', padding='max_length', truncation=True, max_length=12)
-
-        # ここでquestion_tokensを適切に整形する
-        question_tokens = {key: val.squeeze(0) for key, val in question_tokens.items()}  # バッチ次元を削除
+        question_tokens = {key: val.squeeze(0) for key, val in question_tokens.items()}
 
         if self.answer:
             answers = [self.answer2idx[process_text(answer["answer"])] for answer in self.df["answers"][idx]]
             mode_answer_idx = mode(answers)
-
-            # Padding for answers
             max_answers_length = max(len(answers), 10)
             padded_answers = torch.zeros(max_answers_length, dtype=torch.long)
             padded_answers[:len(answers)] = torch.tensor(answers)
-
             return image, question_tokens, padded_answers, int(mode_answer_idx)
         else:
             return image, question_tokens
 
-
     def __len__(self):
         return len(self.df)
+
 
 # 2. 評価指標の実装
 # 簡単にするならBCEを利用する
@@ -276,17 +261,18 @@ class VQAModel(nn.Module):
         self.resnet = ResNet18()
         self.bert = BertModel.from_pretrained('bert-base-uncased')
         self.fc = nn.Sequential(
-            nn.Linear(768 + 512, 512),  # BERTの出力サイズは768
+            nn.Linear(768 + 512, 512),
             nn.ReLU(inplace=True),
             nn.Linear(512, n_answer)
         )
 
     def forward(self, image, question):
-        image_feature = self.resnet(image) # 画像の特徴量
-        question_feature = self.bert(**question).pooler_output # テキストの特徴量
+        image_feature = self.resnet(image)
+        question_feature = self.bert(**question).pooler_output
         x = torch.cat([image_feature, question_feature], dim=1)
         x = self.fc(x)
         return x
+
 
 # 学習の実装
 def train(model, dataloader, optimizer, criterion, device):
