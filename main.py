@@ -109,37 +109,27 @@ class VQADataset(torch.utils.data.Dataset):
         self.idx2answer = dataset.idx2answer
 
     def __getitem__(self, idx):
-        """
-        対応するidxのデータ（画像，質問，回答）を取得．
-
-        Parameters
-        ----------
-        idx : int
-            取得するデータのインデックス
-
-        Returns
-        -------
-        image : torch.Tensor  (C, H, W)
-            画像データ
-        question : torch.Tensor  (vocab_size)
-            質問文をone-hot表現に変換したもの
-        answers : torch.Tensor  (n_answer)
-            10人の回答者の回答のid
-        mode_answer_idx : torch.Tensor  (1)
-            10人の回答者の回答の中で最頻値の回答のid
-        """
         image = Image.open(f"{self.image_dir}/{self.df['image'][idx]}")
         image = self.transform(image)
-        question = process_text(self.df["question"][idx])  # 未知語用の要素を追加
-        question_tokens = self.tokenizer(question, return_tensors='pt', padding=True, truncation=True)
+        question = process_text(self.df["question"][idx])
+        question_tokens = self.tokenizer(question, return_tensors='pt', padding='max_length', truncation=True, max_length=12)
+
+        # ここでquestion_tokensを適切に整形する
+        question_tokens = {key: val.squeeze(0) for key, val in question_tokens.items()}  # バッチ次元を削除
 
         if self.answer:
             answers = [self.answer2idx[process_text(answer["answer"])] for answer in self.df["answers"][idx]]
             mode_answer_idx = mode(answers)
 
-            return image, question_tokens, torch.Tensor(answers), int(mode_answer_idx)
+            # Padding for answers
+            max_answers_length = max(len(answers), 10)
+            padded_answers = torch.zeros(max_answers_length, dtype=torch.long)
+            padded_answers[:len(answers)] = torch.tensor(answers)
+
+            return image, question_tokens, padded_answers, int(mode_answer_idx)
         else:
             return image, question_tokens
+
 
     def __len__(self):
         return len(self.df)
@@ -308,8 +298,13 @@ def train(model, dataloader, optimizer, criterion, device):
 
     start = time.time()
     for image, question, answers, mode_answer in dataloader:
-        image, question, answer, mode_answer = \
-            image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
+        image = image.to(device)
+
+        # 各テンソルをデバイスに移動
+        question = {key: val.to(device) for key, val in question.items()}
+        
+        answers = answers.to(device)
+        mode_answer = mode_answer.to(device)
 
         pred = model(image, question)
         loss = criterion(pred, mode_answer.squeeze())
@@ -323,6 +318,7 @@ def train(model, dataloader, optimizer, criterion, device):
         simple_acc += (pred.argmax(1) == mode_answer).float().mean().item()  # simple accuracy
 
     return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
+
 
 
 def eval(model, dataloader, optimizer, criterion, device):
@@ -346,7 +342,6 @@ def eval(model, dataloader, optimizer, criterion, device):
 
     return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
 
-
 def main():
     # deviceの設定
     set_seed(42)
@@ -361,10 +356,13 @@ def main():
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
     test_dataset.update_dict(train_dataset)
 
+    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
+    # test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    model = VQAModel(vocab_size=len(train_dataset.question2idx)+1, n_answer=len(train_dataset.answer2idx)).to(device)
+
+    model = VQAModel(n_answer=len(train_dataset.answer2idx)).to(device)
 
     # optimizer / criterion
     num_epoch = 20
