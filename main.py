@@ -288,7 +288,7 @@ class VQAModel(nn.Module):
         x = self.fc(x)
         return x
 
-# 4. 学習の実装
+# 学習の実装
 def train(model, dataloader, optimizer, criterion, device):
     model.train()
 
@@ -319,9 +319,7 @@ def train(model, dataloader, optimizer, criterion, device):
 
     return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
 
-
-
-def eval(model, dataloader, optimizer, criterion, device):
+def eval(model, dataloader, criterion, device):
     model.eval()
 
     total_loss = 0
@@ -330,17 +328,23 @@ def eval(model, dataloader, optimizer, criterion, device):
 
     start = time.time()
     for image, question, answers, mode_answer in dataloader:
-        image, question, answer, mode_answer = \
-            image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
+        image = image.to(device)
+
+        # 各テンソルをデバイスに移動
+        question = {key: val.to(device) for key, val in question.items()}
+        
+        answers = answers.to(device)
+        mode_answer = mode_answer.to(device)
 
         pred = model(image, question)
         loss = criterion(pred, mode_answer.squeeze())
 
         total_loss += loss.item()
         total_acc += VQA_criterion(pred.argmax(1), answers)  # VQA accuracy
-        simple_acc += (pred.argmax(1) == mode_answer).mean().item()  # simple accuracy
+        simple_acc += (pred.argmax(1) == mode_answer).float().mean().item()  # simple accuracy
 
     return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
+
 
 def main():
     # deviceの設定
@@ -356,11 +360,8 @@ def main():
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
     test_dataset.update_dict(train_dataset)
 
-    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
-    # test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
-
 
     model = VQAModel(n_answer=len(train_dataset.answer2idx)).to(device)
 
@@ -382,7 +383,11 @@ def main():
     model.eval()
     submission = []
     for image, question in test_loader:
-        image, question = image.to(device), question.to(device)
+        image = image.to(device)
+        
+        # 各テンソルをデバイスに移動
+        question = {key: val.to(device) for key, val in question.items()}
+        
         pred = model(image, question)
         pred = pred.argmax(1).cpu().item()
         submission.append(pred)
@@ -391,6 +396,10 @@ def main():
     submission = np.array(submission)
     torch.save(model.state_dict(), "model.pth")
     np.save("submission.npy", submission)
+
+if __name__ == "__main__":
+    main()
+
 
 if __name__ == "__main__":
     main()
