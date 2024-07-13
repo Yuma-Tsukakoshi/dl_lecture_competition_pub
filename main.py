@@ -280,6 +280,43 @@ class VQAModel(nn.Module):
         return x
 
 
+# ZCA白色化の実装
+class ZCAWhitening():
+    def __init__(self, epsilon=1e-4, device="cuda"):  # 計算が重いのでGPUを用いる
+        self.epsilon = epsilon
+        self.device = device
+
+    def fit(self, images):  # 変換行列と平均をデータから計算
+        """
+        Argument
+        --------
+        images : torchvision.datasets.cifar.CIFAR10
+            入力画像（訓練データ全体）．(N, C, H, W)
+        """
+        x = images[0][0].reshape(1, -1)  # 画像（1枚）を1次元化
+        self.mean = torch.zeros([1, x.size()[1]]).to(self.device)  # 平均値を格納するテンソル．xと同じ形状
+        con_matrix = torch.zeros([x.size()[1], x.size()[1]]).to(self.device)
+        for i in range(len(images)):  # 各データについての平均を取る
+            x = images[i][0].reshape(1, -1).to(self.device)
+            self.mean += x / len(images)
+            con_matrix += torch.mm(x.t(), x) / len(images)
+            if i % 10000 == 0:
+                print("{0}/{1}".format(i, len(images)))
+        con_matrix -= torch.mm(self.mean.t(), self.mean)
+        # E: 固有値 V: 固有ベクトルを並べたもの
+        E, V = torch.linalg.eigh(con_matrix)  # 固有値分解
+        self.ZCA_matrix = torch.mm(torch.mm(V, torch.diag((E.squeeze()+self.epsilon)**(-0.5))), V.t())  # A(\Lambda + \epsilon I)^{1/2}A^T
+        print("completed!")
+
+    def __call__(self, x):
+        size = x.size()
+        x = x.reshape(1, -1).to(self.device)
+        x -= self.mean  # x - \bar{x}
+        x = torch.mm(x, self.ZCA_matrix.t())
+        x = x.reshape(tuple(size))
+        x = x.to("cpu")
+        return x
+
 # 学習の実装
 def train(model, dataloader, optimizer, criterion, device):
     model.train()
@@ -341,15 +378,30 @@ def eval(model, dataloader, criterion, device):
 def main():
     set_seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    class_mapping_url = "https://huggingface.co/spaces/CVPR/VizWiz-CLIP-VQA/raw/main/data/annotations/class_mapping.csv"  # クラスマッピングのCSVファイルのURLを指定
+    
+    # train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", class_mapping_url=class_mapping_url, transform=transforms.ToTensor())
+    # test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", class_mapping_url=class_mapping_url, transform=transforms.ToTensor(), answer=False)
+    # test_dataset.update_dict(train_dataset)
+
+    # #zcaを定義 → RAMがクラッシュするのでコメントアウト
+    # zca = ZCAWhitening()
+    # zca.fit(train_dataset)
+    # zca.fit(test_dataset)
 
     transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(p=1.0),
+        transforms.RandomRotation(degrees=(-180, 180)),
+        transforms.RandomCrop(24, padding=(4, 4, 4, 4), padding_mode='constant'),
+        transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5),
+        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
         transforms.Resize((224, 224)),
-        transforms.ToTensor()
+        transforms.ToTensor(),
+        # zca  # ZCA白色化は必要に応じて
     ])
 
-    class_mapping_url = "https://huggingface.co/spaces/CVPR/VizWiz-CLIP-VQA/raw/main/data/annotations/class_mapping.csv"  # クラスマッピングのCSVファイルのURLを指定
-
-    train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", class_mapping_url=class_mapping_url, transform=transform)
+    train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", class_mapping_url=class_mapping_url, transform=transform)    
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", class_mapping_url=class_mapping_url, transform=transform, answer=False)
     test_dataset.update_dict(train_dataset)
 
