@@ -22,6 +22,9 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def load_class_mapping(csv_url):
+    df = pandas.read_csv(csv_url)
+    return df['answer'].tolist()
 
 def process_text(text):
     # lowercase
@@ -64,17 +67,20 @@ def process_text(text):
 
 # 1. データローダーの作成
 class VQADataset(torch.utils.data.Dataset):
-    def __init__(self, df_path, image_dir, transform=None, answer=True):
+    def __init__(self, df_path, image_dir, class_mapping_url, transform=None, answer=True):
         self.transform = transform
         self.image_dir = image_dir
         self.df = pandas.read_json(df_path)
         self.answer = answer
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
+        # CSVファイルからclass_mappingを読み込む
+        self.class_mapping = load_class_mapping(class_mapping_url)
+        self.answer2idx = {answer: idx for idx, answer in enumerate(self.class_mapping)}
+        self.idx2answer = {idx: answer for idx, answer in enumerate(self.class_mapping)}
+
         self.question2idx = {}
-        self.answer2idx = {}
         self.idx2question = {}
-        self.idx2answer = {}
 
         for question in self.df["question"]:
             question = process_text(question)
@@ -333,17 +339,18 @@ def eval(model, dataloader, criterion, device):
 
 
 def main():
-    # deviceの設定
     set_seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # dataloader / model
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor()
     ])
-    train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform)
-    test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
+
+    class_mapping_url = "https://huggingface.co/spaces/CVPR/VizWiz-CLIP-VQA/raw/main/data/annotations/class_mapping.csv"  # クラスマッピングのCSVファイルのURLを指定
+
+    train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", class_mapping_url=class_mapping_url, transform=transform)
+    test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", class_mapping_url=class_mapping_url, transform=transform, answer=False)
     test_dataset.update_dict(train_dataset)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
@@ -351,12 +358,10 @@ def main():
 
     model = VQAModel(n_answer=len(train_dataset.answer2idx)).to(device)
 
-    # optimizer / criterion
     num_epoch = 20
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
 
-    # train model
     for epoch in range(num_epoch):
         train_loss, train_acc, train_simple_acc, train_time = train(model, train_loader, optimizer, criterion, device)
         print(f"【{epoch + 1}/{num_epoch}】\n"
@@ -365,15 +370,11 @@ def main():
               f"train acc: {train_acc:.4f}\n"
               f"train simple acc: {train_simple_acc:.4f}")
 
-    # 提出用ファイルの作成
     model.eval()
     submission = []
     for image, question in test_loader:
         image = image.to(device)
-        
-        # 各テンソルをデバイスに移動
         question = {key: val.to(device) for key, val in question.items()}
-        
         pred = model(image, question)
         pred = pred.argmax(1).cpu().item()
         submission.append(pred)
@@ -382,10 +383,6 @@ def main():
     submission = np.array(submission)
     torch.save(model.state_dict(), "model.pth")
     np.save("submission.npy", submission)
-
-if __name__ == "__main__":
-    main()
-
 
 if __name__ == "__main__":
     main()
