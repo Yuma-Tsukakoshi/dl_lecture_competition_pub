@@ -264,7 +264,7 @@ def ResNet50():
 class VQAModel(nn.Module):
     def __init__(self, n_answer: int):
         super().__init__()
-        self.resnet = ResNet18()
+        self.resnet = ResNet50()
         self.bert = BertModel.from_pretrained('bert-base-uncased')
         self.fc = nn.Sequential(
             nn.Linear(768 + 512, 512),
